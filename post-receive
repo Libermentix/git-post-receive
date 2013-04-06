@@ -103,23 +103,23 @@ def transform_url(url, repo, hash):
     return url
 
 
-def git(args):
-    args = ['git'] + args
+def git(command):
+    args = ['git'] + command.split()
     p = subprocess.Popen(args, stdout=subprocess.PIPE)
     return p.stdout.read().strip()
 
 
 def get_recipient_address():
-    recipients = git(['config', 'hooks.mailinglist'])
+    recipients = git('config hooks.mailinglist')
     return recipients
 
 
 def git_log(format_code, ref_name):
-    return git(['log', '-n', '1', '--format=%s' % format_code, ref_name])
+    return git(['log -n 1 --format=%s' % format_code, ref_name)
 
 
 def get_repo_name():
-    bare = git(['rev-parse', '--is-bare-repository'])
+    bare = git('rev-parse --is-bare-repository')
     if bare == 'true':
         name = os.path.basename(os.getcwd())
         if name.endswith('.git'):
@@ -130,7 +130,7 @@ def get_repo_name():
 
 
 def send_email(message):
-    sender = git(['config', 'hooks.envelopesender'])
+    sender = git('config hooks.envelopesender')
     recipients = get_recipient_address()
     try:
         s = smtplib.SMTP('localhost')
@@ -155,11 +155,11 @@ def create_head_data(commit):
 
     if commit['action'] == 'create' or commit['action'] == 'update':
         commit['hash'] = commit['new']
-        commit['type'] = git(['cat-file', '-t', commit['new']])
+        commit['type'] = git('cat-file -t', commit['new'])
 
     elif commit['action'] == 'delete':
         commit['hash'] = commit['old']
-        commit['type'] = git(['cat-file', '-t', commit['old']])
+        commit['type'] = git('cat-file -t', commit['old'])
 
     else:
         exit(1)
@@ -167,16 +167,14 @@ def create_head_data(commit):
     commit['branch'] = commit['ref_name'].split('/heads/')[1]
     commit['url'] = transform_url(commit['url'], commit['repo'], commit['hash'])
 
-    taglist = git(['tag', '-l'])
+    taglist = git('tag -l')
     commit['tag'] = 'none'
     if taglist:
-        commit['tag'] = git(['describe', commit['hash'], '--tags'])
+        commit['tag'] = git('describe', commit['hash'], '--tags')
 
     commit['diff'] = ''
     if not result:
-        commit['diff'] = git(
-            ['diff', '%s..%s' % (commit['old'], commit['new'])]
-        )
+        commit['diff'] = git('diff %s..%s' % (commit['old'], commit['new']))
 
     commit['user'] = git_log('%cn', commit['ref_name'])
     commit['email'] = git_log('%ce', commit['ref_name'])
@@ -184,9 +182,8 @@ def create_head_data(commit):
     commit['subject'] = git_log('%s', commit['ref_name'])
     commit['body'] = git_log('%b', commit['ref_name'])
 
-    file_list = git(
-        ['show', '--pretty=format:', '--name-only', commit['hash']]
-    ).split('\n')
+    files = git('show --pretty=format: --name-only', commit['hash'])
+    file_list = files.split('\n')
     files = ''
     for file in file_list:
         files += '%s/%s\n' % (commit['repo'], file)
@@ -247,9 +244,9 @@ Diff:
 def create_tag_data(commit):
 
     commit['tag_name'] = commit['ref_name'].split('/tags/')[1]
-    commit['old_tag'] = git(['describe', '--tags', '%s^' % commit['ref_name']])
+    commit['old_tag'] = git('describe --tags %s^' % commit['ref_name'])
     commit['points_to'] = git(
-        ['rev-parse', '--verify', '%s^{commit}' % commit['tag_name']]
+        'rev-parse --verify %s^{commit}' % commit['tag_name']
     )
 
     commit['user'] = git_log('%cn', commit['ref_name'])
@@ -319,7 +316,7 @@ def main():
 
 if __name__ == '__main__':
 
-    log = create_logger('/var/log/git-updates.log')
+    log = create_logger('/var/log/git-post-receive')
 
     try:
         main()
