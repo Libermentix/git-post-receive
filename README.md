@@ -1,6 +1,6 @@
 git-post-receive
 ================
-A modular python plugin for git's post-receive hook.
+A modular Python plugin for git's post-receive hook.
 
 How the post-receive hook works
 ===============================
@@ -16,7 +16,7 @@ When this script is called, git passes three things to STDIN:
 
     <hash for old revision> <hash for new revision> <ref name>
 
-We pass these values to post-receive-email.py to format our e-mail messages.
+We pass these values to post-receive.py to format our e-mail messages.
 
 Installation
 ============
@@ -26,7 +26,7 @@ to send data to this script. You might use a shell script to do this:
     # post-receive
     > #!/bin/sh
     > read stdin
-    > echo $stdin | /usr/bin/env python post-receive-email.py
+    > echo $stdin | /usr/bin/env python post-receive.py
 
 If you already have existing post-receive scripts in place, simply add those
 scripts to your post-receive file as well:
@@ -35,55 +35,18 @@ scripts to your post-receive file as well:
     > #!/bin/sh
     > read stdin
     > echo $stdin | existing-script.sh
-    > echo $stdin | /usr/bin/env python post-receive-email.py
+    > echo $stdin | /usr/bin/env python post-receive.py
 
 Configuration
 =============
-Provided with this script is a file called 'config.py'. Modify config.py 
-for your environment, and post-receive-email.py will pick up the changes 
-automatically when it is run. Both files must be in the same directory 
-in your filesystem.
+To use this script, you'll need to configure your git configuration for your
+repo. Below is an example of a `.git/config` file:
 
 
-    # Sender
-    # This variable determines the mailbox from which messages are sent.
-    # The 'From:' field in e-mails will be populated with the user who
-    # made the commit for that particular e-mail.
-    sender = 'user@example.com'
-
-    # Recipients
-    # This list contains e-mail addresses to send git notifications to.
-    # You can include any number of addresses here, as long as each 
-    # address is enclosed by single quotes and is separated by a comma.
-    recipients = ['user@example.com', 'user@example.com']
-
-    # HTML
-    # Specify whether or not to send messages in HTML format. The default
-    # is False. Set to True to enable HTML messages.
-    html = False
-
-    # URL
-    # Specify a URL format to use for viewing diffs. The default URL format
-    # is for Atlassian Crucible or Fisheye, but you can specify other URL
-    # formats as well. This option reads for two special keywords: <repo>
-    # and <hash>, and uses these placeholders to generate a valid URL for
-    # your code viewer. For example, you might provide a url format like
-    # this:
-    #
-    # 'http://code.example.com/<repo>/view?hash=<hash>'
-    #
-    # This script will generate a valid URL by subsituting the repo and
-    # hash of the current commit, and this URL will be added to the body of
-    # e-mail notifications.
-    url = 'https://crucible.example.com/changelog/<repo>?cs=<hash>'
-
-You can now also use a local configuration to specify recipients. This is
-useful when you have multiple repositories using the same post-receive-email.py
-script. To do this, create a file called 'local_config.py' in the hooks directory
-for your repository which contains the following:
-
-    #!/usr/bin/python
-    recipients = ['recipient1@example.com', 'recipient2@example.com', '...']
+    [hooks]
+        mailinglist = to@example.com
+        emailprefix = "[git] "
+        envelopesender = "from@example.com"
 
 License
 =======
