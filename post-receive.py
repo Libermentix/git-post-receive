@@ -29,18 +29,16 @@ def prepend_repo_name(file_list):
     return file_list
 
 
-def find_common_string(a, b):
-    if len(a) < len(b):
-        limit = len(a)
-    else:
-        limit = len(b)
-    c = ''
-    for x in range(0, limit):
-        if a[x] == b[x]:
-            c = c + a[x]
-        else:
-            break
-    return c
+def find_common_string(s1, s2):
+    count = 0
+    try:
+        while s1[count] == s2[count]:
+            count += 1
+    except IndexError:
+        # occurs when we finish the shorter string
+        # completely expected
+        pass
+    return s1[:count]
 
 
 def trim_filename(s):
