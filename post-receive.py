@@ -1,18 +1,18 @@
 #!/usr/bin/env python
 
+"""
+To Do:
+* Fix args and add useful ones
+ * gitweb vs crucible, etc
+ * html vs text
+ * short vs long hash format
+"""
+
 import fileinput
-import logging
 import os
 import re
 import smtplib
 import subprocess
-
-
-def create_logger(target_file):
-    logger = logging.getLogger(__name__)
-    logger.handlers = []
-    logger.addHandler(logging.FileHandler(target_file))
-    return logger
 
 
 def find_affected_files(diff_text):
@@ -71,9 +71,7 @@ def find_common_path(file_list):
 
 
 def transform_url(url, repo, hash):
-    url = url.replace('<repo>', repo)
-    url = url.replace('<hash>', hash)
-    return url
+    return url.replace('<repo>', repo).replace('<hash>', hash)
 
 
 def git(command):
@@ -82,9 +80,8 @@ def git(command):
     return p.stdout.read().strip()
 
 
-def get_recipient_address():
-    recipients = git('config hooks.mailinglist')
-    return recipients
+def get_recipient():
+    return git('config hooks.mailinglist')
 
 
 def git_log(format_code, ref_name):
@@ -96,7 +93,7 @@ def get_repo_name():
     if bare == 'true':
         name = os.path.basename(os.getcwd())
         if name.endswith('.git'):
-            name = name[:-4]
+            return name[:-4]
         return name
     else:
         return os.path.basename(os.path.dirname(os.getcwd()))
@@ -104,41 +101,41 @@ def get_repo_name():
 
 def send_email(message):
     sender = git('config hooks.envelopesender')
-    recipients = get_recipient_address()
+    recipients = get_recipient()
     try:
         s = smtplib.SMTP('localhost')
         s.sendmail(sender, recipients, message)
     except:
-        log.exception('The send_email() function encountered an error.')
         exit(1)
 
 
 def create_head_data(commit):
 
-    result = re.match('^0*$', commit['old'])
+    result = re.match('^0*$', commit['old_hash'])
 
     if result:
         commit['action'] = 'create'
     else:
-        result = re.match('^0*$', commit['new'])
+        result = re.match('^0*$', commit['new_hash'])
         if result:
             commit['action'] = 'delete'
         else:
             commit['action'] = 'update'
 
     if commit['action'] == 'create' or commit['action'] == 'update':
-        commit['hash'] = commit['new']
-        commit['type'] = git('cat-file -t', commit['new'])
+        commit['hash'] = commit['new_hash']
+        commit['type'] = git('cat-file -t', commit['new_hash'])
 
     elif commit['action'] == 'delete':
-        commit['hash'] = commit['old']
-        commit['type'] = git('cat-file -t', commit['old'])
+        commit['hash'] = commit['old_hash']
+        commit['type'] = git('cat-file -t', commit['old_hash'])
 
     else:
         exit(1)
 
     commit['branch'] = commit['ref_name'].split('/heads/')[1]
-    commit['url'] = transform_url(commit['url'],
+    url = 'https://crucible.example.com/changelog/<repo>?cs=<hash>'
+    commit['url'] = transform_url(url,
                                   commit['repo'],
                                   commit['hash'])
 
@@ -149,7 +146,8 @@ def create_head_data(commit):
 
     commit['diff'] = ''
     if not result:
-        commit['diff'] = git('diff %s..%s' % (commit['old'], commit['new']))
+        commit['diff'] = git('diff %s..%s' % (commit['old_hash'],
+                                              commit['new_hash']))
 
     commit['user'] = git_log('%cn', commit['ref_name'])
     commit['email'] = git_log('%ce', commit['ref_name'])
@@ -198,8 +196,8 @@ Comment:       "%(subject)s"
 
 %(body)s
 
-New Hash:      %(new)s
-Old Hash:      %(old)s
+New Hash:      %(new_hash)s
+Old Hash:      %(old_hash)s
 Shared Path:   %(shared_path)s
 
 Files affected by this commit:
@@ -213,13 +211,14 @@ Diff:
 """ % commit
 
     message = header + body
-    send_email(message)
+    print message
+    #send_email(message)
 
 
 def create_tag_data(commit):
 
     commit['tag_name'] = commit['ref_name'].split('/tags/')[1]
-    commit['old_tag'] = git('describe --tags %s^' % commit['ref_name'])
+    commit['old_hash_tag'] = git('describe --tags %s^' % commit['ref_name'])
     commit['points_to'] = git(
         'rev-parse --verify %s^{commit}' % commit['tag_name']
     )
@@ -230,11 +229,10 @@ def create_tag_data(commit):
     commit['subject'] = git_log('%s', commit['ref_name'])
     commit['body'] = git_log('%b', commit['ref_name'])
 
-    commit['url'] = transform_url(
-        commit['url'],
-        commit['repo'],
-        commit['points_to']
-    )
+    url = 'https://crucible.example.com/changelog/<repo>?cs=<hash>'
+    commit['url'] = transform_url(url,
+                                  commit['repo'],
+                                  commit['points_to'])
     create_tag_msg(commit)
 
 
@@ -249,9 +247,9 @@ Subject: git [%(repo)s] tag:%(tag_name)s created
 The following tag has been created:
 
 Tag:        %(tag_name)s
-Hash:       %(new)s
+Hash:       %(new_hash)s
 Points To:  %(points_to)s
-Replaces:   %(old_tag)s
+Replaces:   %(old_hash_tag)s
 
 User:       %(user)s <%(email)s>
 Date:       %(date)s
@@ -264,36 +262,74 @@ Crucible URL: %(url)s
 """ % commit
 
     message = header + body
-    send_email(message)
+    print message
+    #send_email(message)
+
+
+def read_commit():
+    """
+    How to identify a merge commit?
+    """
+
+    # read stdin
+    stdin = fileinput.input()[0].split()
+
+    # read old_hash hash and new_hash hash (short versions)
+    old_hash = stdin[0][:7]
+    new_hash = stdin[1][:7]
+
+    # determine action from hash
+    if old_hash == '0000000':
+        action = 'create'
+    elif new_hash == '0000000':
+        action = 'delete'
+    else:
+        action = 'update'
+
+    # read ref name, type, value
+    ref = stdin[2]
+    ref_type, ref_value = ref.split('/')[1:]
+    ref_type = ref_type[:-1]  # trim the s from the ref type
+
+    # return the dict
+    return {'old_hash': old_hash,
+            'new_hash': new_hash,
+            'action': action,
+            'ref': ref,
+            'ref_type': ref_type,
+            'ref_value': ref_value,
+            'repo': get_repo_name()}
 
 
 def main():
 
-    commit = {}
+    # get commit data from stdin
+    commit = read_commit()
 
-    stdin = fileinput.input()[0].split()
-    commit['old'] = stdin[0]
-    commit['new'] = stdin[1]
-    commit['ref_name'] = stdin[2]
+    # print old and new hashes
+    # this should go in email bodies
+    print '%s => %s' % (commit.get('old_hash', ''),
+                        commit.get('new_hash', ''))
 
-    commit['url'] = 'https://crucible.example.com/changelog/<repo>?cs=<hash>'
-    commit['repo'] = get_repo_name()
-    commit['recipient'] = get_recipient_address()
+    # head commits
+    if commit.get('ref_type', '') == 'head':
+        subject = '[git] %s: branch %s %sd (%s)'
+        subject = subject % (commit.get('repo', ''),
+                             commit.get('ref_value', ''),
+                             commit.get('action', ''),
+                             '/')
+        print 'H', subject
+        #send_head_message()
 
-    if 'heads' in commit['ref_name']:
-        create_head_data(commit)
-    elif 'tags' in commit['ref_name']:
-        create_tag_data(commit)
-    else:
-        m = 'Neither "heads" nor "tags" was in this ref name: %s'
-        log.debug(m % ref_name)
+    # tag commits
+    elif commit.get('ref_type', '') == 'tag':
+        subject = '[git] %s: tag %s %sd'
+        subject = subject % (commit.get('repo', ''),
+                             commit.get('ref_value', ''),
+                             commit.get('action', ''))
+        print 'T', subject
+        #send_tag_message()
 
 
 if __name__ == '__main__':
-
-    log = create_logger('/var/log/git-post-receive')
-
-    try:
-        main()
-    except:
-        log.exception('Encountered an exception in the main loop.')
+    main()
