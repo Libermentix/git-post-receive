@@ -2,67 +2,44 @@
 
 """
 To Do:
-* Fix all the bad algorithms in the convenience functions section
-* Fix path algorithm
- * common_string function is decent
- * could approach the problem from the list perspective
- * i.e. focus on infinite size set instead of one string to one string
-* Fix file find algorithm
- * git diff --name-status > parsing diff text
- * there's probably something better still
 * Fix args and add useful ones
  * gitweb vs crucible, etc
- * html vs text
+ * html vs text (html by default)
  * short vs long hash format
  * email reply-to field somehow
 """
 
 import fileinput
 import os
-import re
 import smtplib
 import subprocess
 
-
-"""
-Convenience functions
-"""
-def find_common_string(s1, s2):
-    count = 0
-    try:
-        while s1[count] == s2[count]:
-            count += 1
-    except IndexError:
-        # occurs when we finish the shorter string
-        pass
-    return s1[:count]
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 
-def trim_filename(s):
-    for x in reversed(range(0, len(s))):
-        if s[x] == '/':
-            p = x
-            break
-    p += 1
-    return s[0:p]
-
-
+# Convenience functions
 def find_common_path(file_list):
-    if len(file_list) > 1:
-        a = file_list[0]
-        b = file_list[1]
-        shared_path = find_common_string(a, b)
-        if len(file_list) > 2:
-            for x in range(2, len(file_list)):
-                a = shared_path
-                b = file_list[x]
-                shared_path = find_common_string(a, b)
-    elif len(file_list) == 1:
-        shared_path = file_list[0]
-    else:
-        return ''
+    shortest_len = len(min(file_list, key=len))
 
-    return trim_filename(shared_path)
+    # iterate horizontally
+    for position in xrange(0, shortest_len, 1):
+        try:
+            character = file_list[0][position]
+
+            # iterate vertically
+            for file_name in file_list:
+                if file_name[position] != character:
+                    path = file_list[0][:position]
+
+        except:
+            path = file_list[0][:position]
+
+    if not path.endswith('/'):
+        # trim any text after the last '/', but keep the trailing '/'
+        return '/'.join(path.split('/')[:-1]) + '/'
+    else:
+        return path
 
 
 def transform_url(url, repo, hash):
@@ -94,15 +71,33 @@ def get_repo_name():
     else:
         return os.path.basename(os.path.dirname(os.getcwd()))
 
-"""
-Work functions
-"""
-def send_email(message):
+
+# Work functions
+def send_email(subject, body, diff=None):
+
+    # pull sender and recipients from git's config
     sender = git('config hooks.envelopesender')
     recipients = git('config hooks.mailinglist')
+
+    # build a MIME/multipart message to enable attachments
+    message = MIMEMultipart('alternative')
+    message['To'] = sender
+    message['Subject'] = subject
+
+    # attach the diff as a file
+    if diff is not None:
+        attachment = MIMEText(diff)
+        attachment.add_header('Content-Disposition',
+                              'attachment',
+                              filename='diff.txt')
+        message.attach(attachment)
+
+    # attach the body to the message
+    message.attach(MIMEText(body, 'plain'))
+
     try:
-        s = smtplib.SMTP('localhost')
-        s.sendmail(sender, recipients, message)
+        smtp_client = smtplib.SMTP('localhost')
+        smtp_client.sendmail(sender, recipients, message.as_string())
     except:
         exit(1)
 
@@ -151,6 +146,7 @@ def process_head(commit):
     """
     To Do:
     * Figure out what data should go in create/delete message bodies
+    * Figure out merge commits
     """
 
     # build subject line
@@ -159,13 +155,13 @@ def process_head(commit):
                          commit.get('ref_val', 'unknown branch'),
                          commit.get('action', 'change'))
 
-    if commit.get('action' , '') == 'update':
+    if commit.get('action', '') == 'update':
 
         # determine affected files and their shared path
         new_hash = commit.get('new_hash', None)
         if new_hash is not None:
-            list_files = 'diff-tree --no-commit-id --name-only -r %s' % new_hash
-            file_list = git(list_files).split('\n')
+            ls = 'diff-tree --no-commit-id --name-only -r %s' % new_hash
+            file_list = git(ls).split('\n')
             if len(file_list) == 1:
                 path = '%s/%s' % (commit.get('repo', 'unknown repo'),
                                   file_list[0])
@@ -199,14 +195,12 @@ def process_head(commit):
         for file_name in file_list:
             body += '\n%s' % file_name
         body += '\n\nCode review URL:'
-        body += '\nhttp://lol'
+        url = 'http://git.wdroberts.local/?repo=%s&h=%s'  # debug url
+        body += '\n' + url % (commit.get('repo', ''),
+                              commit.get('new_hash', ''))
     else:
         body = None
         commit_diff = None
-
-    print 'S', subject
-    print 'B', body
-    exit(0)
 
     # return subject, body, and diff text
     return subject, body, commit_diff
@@ -231,10 +225,10 @@ def process_tag(commit):
                        commit.get('ref_val', ''),
                        commit.get('new_hash', ''))
 
-        # git log stores commits, not tags
+        # git log views commits, not tags
         # note: the values for tagger, email, and date actually point to
         #       the commit referenced by the tag (instead of the tag)
-        # use git for-each-ref for this (?)
+        # use git for-each-ref for this?
         # note: you can only pull tag info (tagger, date, etc.) from an
         #       annotated tag.
         """
@@ -270,12 +264,12 @@ def main():
     # head commits
     if 'head' in commit.get('ref', ''):
         subject, body, diff = process_head(commit)
-        #send_email(subject, body, diff)
+        send_email(subject, body, diff)
 
     # tag commits
     if 'tag' in commit.get('ref', ''):
         subject, body = process_tag(commit)
-        #send_email(subject, body)
+        send_email(subject, body)
 
 if __name__ == '__main__':
     main()
