@@ -2,10 +2,19 @@
 
 """
 To Do:
+* Fix all the bad algorithms in the convenience functions section
+* Fix path algorithm
+ * common_string function is decent
+ * could approach the problem from the list perspective
+ * i.e. focus on infinite size set instead of one string to one string
+* Fix file find algorithm
+ * git diff --name-status > parsing diff text
+ * there's probably something better still
 * Fix args and add useful ones
  * gitweb vs crucible, etc
  * html vs text
  * short vs long hash format
+ * email reply-to field somehow
 """
 
 import fileinput
@@ -15,20 +24,9 @@ import smtplib
 import subprocess
 
 
-def find_affected_files(diff_text):
-    file_list = []
-    for line in diff_text.split('\n'):
-        if '--- a/' in line:
-            file_list.append(line.split()[1][1:])
-    return file_list
-
-
-def prepend_repo_name(file_list):
-    for x in range(0, len(file_list)):
-        file_list[x] = str(commit['repo'] + file_list[x])
-    return file_list
-
-
+"""
+Convenience functions
+"""
 def find_common_string(s1, s2):
     count = 0
     try:
@@ -36,7 +34,6 @@ def find_common_string(s1, s2):
             count += 1
     except IndexError:
         # occurs when we finish the shorter string
-        # completely expected
         pass
     return s1[:count]
 
@@ -78,12 +75,13 @@ def git(command):
     return p.stdout.read().strip()
 
 
-def get_recipient():
-    return git('config hooks.mailinglist')
+#def git_log(format_code, ref_name):
+#    return git('log -n 1 --format=%s %s' % (format_code, ref_name))
 
 
-def git_log(format_code, ref_name):
-    return git(['log -n 1 --format=%s' % format_code, ref_name])
+def get_commit_info(format_code, commit_id):
+    return git('diff-tree -s --format=%s %s' % (format_code,
+                                                commit_id))
 
 
 def get_repo_name():
@@ -96,10 +94,12 @@ def get_repo_name():
     else:
         return os.path.basename(os.path.dirname(os.getcwd()))
 
-
+"""
+Work functions
+"""
 def send_email(message):
     sender = git('config hooks.envelopesender')
-    recipients = get_recipient()
+    recipients = git('config hooks.mailinglist')
     try:
         s = smtplib.SMTP('localhost')
         s.sendmail(sender, recipients, message)
@@ -107,196 +107,159 @@ def send_email(message):
         exit(1)
 
 
-def create_head_data(commit):
-
-    result = re.match('^0*$', commit['old_hash'])
-
-    if result:
-        commit['action'] = 'create'
-    else:
-        result = re.match('^0*$', commit['new_hash'])
-        if result:
-            commit['action'] = 'delete'
-        else:
-            commit['action'] = 'update'
-
-    if commit['action'] == 'create' or commit['action'] == 'update':
-        commit['hash'] = commit['new_hash']
-        commit['type'] = git('cat-file -t', commit['new_hash'])
-
-    elif commit['action'] == 'delete':
-        commit['hash'] = commit['old_hash']
-        commit['type'] = git('cat-file -t', commit['old_hash'])
-
-    else:
-        exit(1)
-
-    commit['branch'] = commit['ref_name'].split('/heads/')[1]
-    url = 'https://crucible.example.com/changelog/<repo>?cs=<hash>'
-    commit['url'] = transform_url(url,
-                                  commit['repo'],
-                                  commit['hash'])
-
-    taglist = git('tag -l')
-    commit['tag'] = 'none'
-    if taglist:
-        commit['tag'] = git('describe', commit['hash'], '--tags')
-
-    commit['diff'] = ''
-    if not result:
-        commit['diff'] = git('diff %s..%s' % (commit['old_hash'],
-                                              commit['new_hash']))
-
-    commit['user'] = git_log('%cn', commit['ref_name'])
-    commit['email'] = git_log('%ce', commit['ref_name'])
-    commit['date'] = git_log('%ad', commit['ref_name'])
-    commit['subject'] = git_log('%s', commit['ref_name'])
-    commit['body'] = git_log('%b', commit['ref_name'])
-
-    files = git('show --pretty=format: --name-only', commit['hash'])
-    file_list = files.split('\n')
-    files = ''
-    for file in file_list:
-        files += '%s/%s\n' % (commit['repo'], file)
-    commit['files'] = files.strip()
-
-    file_list = files.strip().split('\n')
-    commit['shared_path'] = find_common_path(file_list)
-
-    if commit['shared_path'] == str(commit['repo'] + '/'):
-
-        try:
-            file_list = find_affected_files(commit['diff'])
-            file_list = prepend_repo_name(file_list, commit['repo'])
-            commit['shared_path'] = find_common_path(file_list)
-
-        except:
-            commit['shared_path'] = str(commit['repo'] + '/')
-
-    create_head_msg(commit)
-
-
-def create_head_msg(commit):
-
-    header = """To: %(recipient)s
-From: %(user)s <%(email)s>
-Subject: git [%(repo)s] branch:%(branch)s path:%(shared_path)s...
-""" % commit
-
-    body = """
-Repository:    %(repo)s
-Branch:        %(branch)s
-Tag:           %(tag)s
-Committer:     %(user)s <%(email)s>
-Commit Date:   %(date)s
-
-Comment:       "%(subject)s"
-
-%(body)s
-
-New Hash:      %(new_hash)s
-Old Hash:      %(old_hash)s
-Shared Path:   %(shared_path)s
-
-Files affected by this commit:
-%(files)s
-
-Crucible URL:      %(url)s
-
-Diff:
-
-%(diff)s
-""" % commit
-
-    message = header + body
-    print message
-    #send_email(message)
-
-
 def create_tag_data(commit):
-
-    commit['tag_name'] = commit['ref_name'].split('/tags/')[1]
-    commit['old_hash_tag'] = git('describe --tags %s^' % commit['ref_name'])
-    commit['points_to'] = git(
-        'rev-parse --verify %s^{commit}' % commit['tag_name']
-    )
-
-    commit['user'] = git_log('%cn', commit['ref_name'])
-    commit['email'] = git_log('%ce', commit['ref_name'])
-    commit['date'] = git_log('%ad', commit['ref_name'])
-    commit['subject'] = git_log('%s', commit['ref_name'])
-    commit['body'] = git_log('%b', commit['ref_name'])
-
-    url = 'https://crucible.example.com/changelog/<repo>?cs=<hash>'
-    commit['url'] = transform_url(url,
-                                  commit['repo'],
-                                  commit['points_to'])
-    create_tag_msg(commit)
-
-
-def create_tag_msg(commit):
-
-    header = """To: %(recipient)s
-From: %(user)s <%(email)s>
-Subject: git [%(repo)s] tag:%(tag_name)s created
-""" % commit
-
-    body = """
-The following tag has been created:
-
-Tag:        %(tag_name)s
-Hash:       %(new_hash)s
-Points To:  %(points_to)s
-Replaces:   %(old_hash_tag)s
-
-User:       %(user)s <%(email)s>
-Date:       %(date)s
-
-Comment:    %(subject)s
-
-%(body)s
-
-Crucible URL: %(url)s
-""" % commit
-
-    message = header + body
-    print message
-    #send_email(message)
+    old_hash_tag = git('describe --tags %s^' % commit.get('ref'))
+    points_to = git('rev-parse --verify %s^{commit}' % commit.get('ref_val'))
 
 
 def read_commit():
     """
-    How to identify a merge commit?
+    Reads and generates data about a commit, and then returns a dictionary
+    representation of that commit data.
+
+    @return: dictionary containing commit data
     """
 
-    # read stdin
+    # read hashes and ref name
     stdin = fileinput.input()[0].split()
-
-    # read old_hash hash and new_hash hash (short versions)
     old_hash = stdin[0][:7]
     new_hash = stdin[1][:7]
+    ref = stdin[2]
+    ref_val = ref.split('/')[2]
 
     # determine action from hash
     if old_hash == '0000000':
         action = 'create'
-    elif new_hash == '0000000':
-        action = 'delete'
     else:
-        action = 'update'
+        if new_hash == '0000000':
+            action = 'delete'
+        else:
+            action = 'update'
 
-    # read ref name, type, value
-    ref = stdin[2]
-    ref_type, ref_value = ref.split('/')[1:]
-    ref_type = ref_type[:-1]  # trim the s from the ref type
+    # get repository name
+    repo = get_repo_name()
 
-    # return the dict
     return {'old_hash': old_hash,
             'new_hash': new_hash,
-            'action': action,
             'ref': ref,
-            'ref_type': ref_type,
-            'ref_value': ref_value,
-            'repo': get_repo_name()}
+            'ref_val': ref_val,
+            'action': action,
+            'repo': repo}
+
+
+def process_head(commit):
+    """
+    To Do:
+    * Figure out what data should go in create/delete message bodies
+    """
+
+    # build subject line
+    subject = '%s: branch %s %sd'
+    subject = subject % (commit.get('repo', 'unknown repo'),
+                         commit.get('ref_val', 'unknown branch'),
+                         commit.get('action', 'change'))
+
+    if commit.get('action' , '') == 'update':
+
+        # determine affected files and their shared path
+        new_hash = commit.get('new_hash', None)
+        if new_hash is not None:
+            list_files = 'diff-tree --no-commit-id --name-only -r %s' % new_hash
+            file_list = git(list_files).split('\n')
+            if len(file_list) == 1:
+                path = '%s/%s' % (commit.get('repo', 'unknown repo'),
+                                  file_list[0])
+            elif len(file_list) > 1:
+                path = '%s/%s' % (commit.get('repo', 'unknown repo'),
+                                  find_common_path(file_list))
+            else:
+                path = ''
+        else:
+            path = ''
+
+        # add path to subject
+        subject += ' (%s)' % path
+
+        # get commit info
+        author_name = get_commit_info('%an', new_hash)
+        author_email = get_commit_info('%ae', new_hash)
+        commit_date = get_commit_info('%cd', new_hash)
+        commit_message = get_commit_info('%s', new_hash)
+        commit_body = get_commit_info('%b', new_hash)
+        commit_diff = git('diff %s..%s' % (commit.get('old_hash', ''),
+                                           commit.get('new_hash', '')))
+
+        # build message body
+        body = 'Author: %s <%s>' % (author_name, author_email)
+        body += '\nDate: %s' % commit_date
+        body += '\nSubject: %s' % commit_message
+        if commit_body != '':
+            body += '\nBody:\n%s' % commit_body
+        body += '\n\nFiles affected by this commit:'
+        for file_name in file_list:
+            body += '\n%s' % file_name
+        body += '\n\nCode review URL:'
+        body += '\nhttp://lol'
+    else:
+        body = None
+        commit_diff = None
+
+    print 'S', subject
+    print 'B', body
+    exit(0)
+
+    # return subject, body, and diff text
+    return subject, body, commit_diff
+
+
+def process_tag(commit):
+    """
+    Normal? Annotated? Signed?
+    Author, E-Mail, Date for the tag vs. for the commit
+    """
+
+    # generate subject line
+    subject = '%s: tag %s %sd'
+    subject = subject % (repo,
+                         commit.get('ref_val', ''),
+                         action)
+
+    # generate message body
+    if action == 'create':
+        body = '%s tag %s points to %s.'
+        body = body % (repo,
+                       commit.get('ref_val', ''),
+                       commit.get('new_hash', ''))
+
+        # git log stores commits, not tags
+        # note: the values for tagger, email, and date actually point to
+        #       the commit referenced by the tag (instead of the tag)
+        # use git for-each-ref for this (?)
+        # note: you can only pull tag info (tagger, date, etc.) from an
+        #       annotated tag.
+        """
+        git for-each-ref --count=3 --sort='-*authordate' \
+        --format='From: %(*authorname) %(*authoremail)
+        Subject: %(*subject)
+        Date: %(*authordate)
+        Ref: %(*refname)
+
+        %(*body)
+        ' 'refs/tags'
+        """
+        #tagger = git_log('%cn', commit.get('ref', ''))
+        #email = git_log('%ce', commit.get('ref', ''))
+        #date = git_log('%cd', commit.get('ref', ''))
+        #body += '\n\nTagger: %s <%s>\n' % (tagger, email)
+        #body += 'Date: %s\n' % date
+
+    elif action == 'delete':
+        body = '%s tag %s deleted.'
+        body = body % (repo,
+                       commit.get('ref_val', ''))
+
+    else:
+        body = ''
 
 
 def main():
@@ -304,30 +267,15 @@ def main():
     # get commit data from stdin
     commit = read_commit()
 
-    # print old and new hashes
-    # this should go in email bodies
-    print '%s => %s' % (commit.get('old_hash', ''),
-                        commit.get('new_hash', ''))
-
     # head commits
-    if commit.get('ref_type', '') == 'head':
-        subject = '[git] %s: branch %s %sd (%s)'
-        subject = subject % (commit.get('repo', ''),
-                             commit.get('ref_value', ''),
-                             commit.get('action', ''),
-                             '/')
-        print 'H', subject
-        #send_head_message()
+    if 'head' in commit.get('ref', ''):
+        subject, body, diff = process_head(commit)
+        #send_email(subject, body, diff)
 
     # tag commits
-    elif commit.get('ref_type', '') == 'tag':
-        subject = '[git] %s: tag %s %sd'
-        subject = subject % (commit.get('repo', ''),
-                             commit.get('ref_value', ''),
-                             commit.get('action', ''))
-        print 'T', subject
-        #send_tag_message()
-
+    if 'tag' in commit.get('ref', ''):
+        subject, body = process_tag(commit)
+        #send_email(subject, body)
 
 if __name__ == '__main__':
     main()
