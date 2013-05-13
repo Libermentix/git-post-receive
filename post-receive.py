@@ -2,6 +2,7 @@
 
 """
 To Do:
+* Finish all features for head/tag commits
 * Fix args and add useful ones
  * gitweb vs crucible, etc
  * html vs text (html by default)
@@ -18,8 +19,14 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 
-# Convenience functions
 def find_common_path(file_list):
+    """
+    Iterates over the characters in a list of file names to determine and
+    return the longest common path of those files.
+
+    @param file_list: A list of string filenames
+    @return: The common path of those files
+    """
     shortest_len = len(min(file_list, key=len))
 
     # iterate horizontally
@@ -42,26 +49,26 @@ def find_common_path(file_list):
         return path
 
 
-def transform_url(url, repo, hash):
-    return url.replace('<repo>', repo).replace('<hash>', hash)
-
-
 def git(command):
+    """
+    Convenience function to run git commands without a shell.
+
+    @param command: The arguments to a git command normally executed from a
+                    shell. E.g., for "git remote show", this parameter would
+                    be "remote show" (string)
+    @return: The output of the git command executed (string)
+    """
     args = ['git'] + command.split()
     p = subprocess.Popen(args, stdout=subprocess.PIPE)
     return p.stdout.read().strip()
 
 
-#def git_log(format_code, ref_name):
-#    return git('log -n 1 --format=%s %s' % (format_code, ref_name))
-
-
-def get_commit_info(format_code, commit_id):
-    return git('diff-tree -s --format=%s %s' % (format_code,
-                                                commit_id))
-
-
 def get_repo_name():
+    """
+    Uses the filesystem to determine the name of a git repository.
+
+    @return: Name of the repository using post-receive (string)
+    """
     bare = git('rev-parse --is-bare-repository')
     if bare == 'true':
         name = os.path.basename(os.getcwd())
@@ -72,8 +79,17 @@ def get_repo_name():
         return os.path.basename(os.path.dirname(os.getcwd()))
 
 
-# Work functions
 def send_email(subject, body, diff=None):
+    """
+    Packages a commit e-mail and sends it out. If provided a commit diff,
+    this function will attach that diff as a text file to the e-mail. Uses
+    git configuration settings to determine sender, recipients, and code
+    review URL.
+
+    @param subject: Line to use as e-mail subject (string)
+    @param body: Text to use as e-mail body (string)
+    @param diff: Commit diff to convert to an attachment (optional, string)
+    """
 
     # pull sender and recipients from git's config
     sender = git('config hooks.envelopesender')
@@ -100,11 +116,6 @@ def send_email(subject, body, diff=None):
         smtp_client.sendmail(sender, recipients, message.as_string())
     except:
         exit(1)
-
-
-def create_tag_data(commit):
-    old_hash_tag = git('describe --tags %s^' % commit.get('ref'))
-    points_to = git('rev-parse --verify %s^{commit}' % commit.get('ref_val'))
 
 
 def read_commit():
@@ -144,6 +155,8 @@ def read_commit():
 
 def process_head(commit):
     """
+    Work in progress.
+
     To Do:
     * Figure out what data should go in create/delete message bodies
     * Figure out merge commits
@@ -177,11 +190,12 @@ def process_head(commit):
         subject += ' (%s)' % path
 
         # get commit info
-        author_name = get_commit_info('%an', new_hash)
-        author_email = get_commit_info('%ae', new_hash)
-        commit_date = get_commit_info('%cd', new_hash)
-        commit_message = get_commit_info('%s', new_hash)
-        commit_body = get_commit_info('%b', new_hash)
+        query = 'diff-tree -s --format=%s %s'
+        author_name = git(query % ('%an', new_hash))
+        author_email = git(query % ('%ae', new_hash))
+        commit_date = git(query % ('%cd', new_hash))
+        commit_message = git(query % ('%s', new_hash))
+        commit_body = git(query % ('%b', new_hash))
         commit_diff = git('diff %s..%s' % (commit.get('old_hash', ''),
                                            commit.get('new_hash', '')))
 
@@ -194,10 +208,20 @@ def process_head(commit):
         body += '\n\nFiles affected by this commit:'
         for file_name in file_list:
             body += '\n%s' % file_name
-        body += '\n\nCode review URL:'
-        url = 'http://git.wdroberts.local/?repo=%s&h=%s'  # debug url
-        body += '\n' + url % (commit.get('repo', ''),
-                              commit.get('new_hash', ''))
+
+        # determine code viewer URL
+        code_viewer = 'gitweb'
+        if code_viewer == 'gitweb':
+            url = 'http://git.example.com/?repo=<repo>&h=<hash>'
+            url = url.replace('<repo>', commit.get('repo', ''))
+            url = url.replace('<hash>', commit.get('new_hash', ''))
+        elif code_viewer == 'crucible':
+            url = 'http://crucible.example.com/?repo=<repo>&h=<hash>'
+            url = url.replace('<repo>', commit.get('repo', ''))
+            url = url.replace('<hash>', commit.get('new_hash', ''))
+        else:
+            url = 'N/A'
+        body += '\n\nCode review URL: %s' % url
     else:
         body = None
         commit_diff = None
@@ -208,8 +232,14 @@ def process_head(commit):
 
 def process_tag(commit):
     """
+    Work in progress.
+
     Normal? Annotated? Signed?
     Author, E-Mail, Date for the tag vs. for the commit
+
+    From old function:
+    old_hash_tag = git('describe --tags %s^' % commit.get('ref'))
+    points_to = git('rev-parse --verify %s^{commit}' % commit.get('ref_val'))
     """
 
     # generate subject line
@@ -241,11 +271,6 @@ def process_tag(commit):
         %(*body)
         ' 'refs/tags'
         """
-        #tagger = git_log('%cn', commit.get('ref', ''))
-        #email = git_log('%ce', commit.get('ref', ''))
-        #date = git_log('%cd', commit.get('ref', ''))
-        #body += '\n\nTagger: %s <%s>\n' % (tagger, email)
-        #body += 'Date: %s\n' % date
 
     elif action == 'delete':
         body = '%s tag %s deleted.'
@@ -257,6 +282,9 @@ def process_tag(commit):
 
 
 def main():
+    """
+    Reads a commit, processes it, and sends it to the mailer.
+    """
 
     # get commit data from stdin
     commit = read_commit()
